@@ -1,122 +1,70 @@
 library(dplyr)
 library(data.table)
-#library(vcfR)
 library(leafcutter)
 library(stringr)
 library(readr)
+library(qvalue)
 
-setwd("/Users/Jack/Documents/SQTL_LeafViz/")
+setwd("~/Desktop/sQTLviz-master/")
 
-permutation_res <- "data/permutations.all.CMC.txt.gz.0.05.bh.txt"
-
-# Yang now wants all associations at P < 1e-5
-#permutation_res <- "data/permutations.all.CMC.p0.00001.txt"
+permutation_res <- "permutations_full.txt.gz"
 
 # other files
 VCF = "data/genotypes_MAF1.vcf.gz"
-clusters_table <- "data/CMC_perind_numers.counts_renamed.gz" # now just the counts - don't need to strip ratios
-
-#####
-# 35 SNPs from Nalls et al 
-## present the top SNP x cluster associations
-######
-
-GWAS_SNPs <- "data/PD_GWAS_SNPs.txt"
-GWAS <- read.table(GWAS_SNPs, header=TRUE, stringsAsFactors = FALSE)
-
-gwas_snps <- GWAS$SNP.orig
-
-GWAS_SNP_associations <- "data/PD_SNPs_associations.all.CMC.txt"
-gwas_assoc <- read.table(GWAS_SNP_associations,header=FALSE, stringsAsFactors = FALSE)
-
-gwas_assoc <- gwas_assoc %>%
-              mutate( SNP = str_split_fixed(V2, "\\.", 3)[,1] ) %>%
-              filter( SNP %in% gwas_snps ) %>%
-              rename( "cluster" = V1, "SNP_full" = V2, "P" = V4 )
-
-top_gwas_assoc <- group_by(gwas_assoc, SNP) %>%
-                  summarise( P = min(P) ) %>%
-                  left_join( gwas_assoc, by = c("SNP", "P" ) )
-# for finding in VCF
-gwas_full_snps <- top_gwas_assoc$SNP_full
-gwas_clusters <- str_split_fixed(top_gwas_assoc$cluster, "\\:", 4)[,4]
-
-#### Yang's Top Two Hits from the TWAS - MAPT and MTOR
-# zgrep for them in all.associations
-Yang_SNPs <- "data/Yang_chosen_SNPs_associations.all.CMC.txt"
-Yang_assoc <- read.table(Yang_SNPs, header=FALSE, stringsAsFactors = FALSE)
-
-Yang_assoc <- Yang_assoc %>%
-  mutate( SNP = str_split_fixed(V2, "\\.", 3)[,1] ) %>%
-  rename( "cluster" = V1, "SNP_full" = V2, "P" = V4 )
-
-top_yang_assoc <- group_by(Yang_assoc, SNP) %>%
-  summarise( P = min(P) ) %>%
-  left_join( Yang_assoc, by = c("SNP", "P" ) )
-
-yang_full_snps <- top_yang_assoc$SNP_full
-yang_clusters <- str_split_fixed(top_yang_assoc$cluster, "\\:", 4)[,4]
+clusters_table <- "Ne-sQTL_perind_numers.counts.gz" # now just the counts - don't need to strip ratios
 
 # PRE-REQUISITES:
-
 # annotation
-annotation_code <- "/Users/Jack/google_drive/Work/PhD_Year_3/leafcutter/leafviz/annotation_codes/gencode_hg19/gencode_hg19"
+annotation_code <- "gencode_hg19"
 exon_file <- paste0(annotation_code, "_all_exons.txt.gz")
 all_introns <- paste0(annotation_code,"_all_introns.bed.gz" )
 threeprime_file <- paste0( annotation_code,"_threeprime.bed.gz")
 fiveprime_file <- paste0( annotation_code,"_fiveprime.bed.gz")
 
-exons_table <- if (!is.null( exon_file )) {
-  cat("Loading exons from",exon_file,"\n")
-  as.data.frame(fread(paste("zless",exon_file)) )
+exons_table <- if (!is.null(exon_file)) {
+  cat("Loading exons from", exon_file, "\n")
+  as.data.frame(fread(paste("zless", exon_file)) )
 } else {
   cat("No exon_file provided.\n")
   NULL
 }
 
 ## CHECK VCFTOOLS IS INSTALLED
-if( !file.exists(system("which vcftools", intern=TRUE) )){
+if( !file.exists(system("which vcftools", intern = TRUE) )){
   stop("vcftools is not in your $PATH - have you installed it?")
 }
 ## BEDTOOLS
-if( !file.exists(system("which bedtools", intern=TRUE) )){
+if( !file.exists(system("which bedtools", intern = TRUE) )){
   stop("bedtools is not in your $PATH - have you installed it?")
 }
 
-# START
-
 # read in clusters
-#clusters <- as.data.frame(fread(paste("zless", clusters_table), sep = " ", row.names = 1,  header = TRUE, stringsAsFactors = FALSE) )
-
 print("reading in clusters")
-clusters <- read.table(clusters_table, header=TRUE)
+clusters <- read.table(clusters_table, header = TRUE)
 
 # find and harmonise sample names
 samples <- names(clusters)[2:ncol(clusters)]
-
-#convert sample names 
-samples <- gsub( "merged_", "", gsub( "_RNA_PFC", "", samples ) ) 
-names(clusters)[2:ncol(clusters)] <- samples
+srr2gtex <- fread("tissue_table.txt")
+gtex_samples <- srr2gtex[Run %in% samples]$submitted_subject_id
 
 # write out samples
 samples_file <- "used_samples.txt"
-write.table(samples, samples_file, col.names = FALSE, row.names = FALSE, quote = FALSE)
+write.table(gtex_samples, samples_file, col.names = FALSE, row.names = FALSE, quote = FALSE)
 
 # read in junction x snp results
 print("reading in results")
-# q < 0.05
-res <- as.data.frame(fread(permutation_res, header =TRUE), stringsAsFactors = FALSE)
-genotypes <- unique(res$dummy2)
+res <- fread(permutation_res, header = FALSE) %>%
+  setnames(., c("intron_cluster", "chrom", "pheno_start", "pheno_end", 
+                "strand", "total_cis", "distance", "variant_id", "variant_chrom", 
+                "var_start", "var_end", "df", "dummy", "param_1", "param_2",
+                "p", "beta", "emp_p", "adj_p"))
 
-# p < 1e-5
-#res <- as.data.frame(fread(permutation_res, header =FALSE), stringsAsFactors = FALSE)
-#genotypes <- unique(res$V6)
+res[, qval := qvalue(res$adj_p)$qvalues]
 
-# add in Nalls' GWAS SNPs and Yang's preferred SNPs
-genotypes <- c(genotypes, gwas_full_snps,yang_full_snps)
+sig_fdr_10 <- unique(res[qval < 0.1]$variant_id)
 
-genotypes_file <- "data/sig_snps_plus_GWAS_Yang_snps.txt"
-write.table(genotypes, file = genotypes_file, col.names = FALSE, row.names = FALSE, quote = FALSE)
+sig_snp_file <- "sig_snps.txt"
+write.table(sig_fdr_10, file = sig_snp_file, col.names = FALSE, row.names = FALSE, quote = FALSE)
 
 ######
 # PREPARE GENOTYPES
@@ -124,21 +72,23 @@ write.table(genotypes, file = genotypes_file, col.names = FALSE, row.names = FAL
 
 # use vcftools to filter out just the snps and samples required
 print("filtering VCF")
-cmd <- paste( "vcftools --gzvcf", VCF,  "--snps", genotypes_file, "--keep", samples_file, "--recode --stdout" )
-vcf <- fread(cmd)
+#cmd <- paste("vcftools --gzvcf", VCF,  "--snps", sig_snp_file, "--keep", samples_file, "--recode --stdout")
+#vcf <- fread(cmd)
+vcf <- fread("grep -v '^##' out.recode.vcf")
+
 
 # round genotypes to 0,1,2
-vcf <- vcf[ complete.cases(vcf), ]
-vcf[,10:ncol(vcf)] <- as.data.frame(apply( vcf[,10:ncol(vcf)], MAR = c(1,2), FUN = round ))
+vcf <- vcf[complete.cases(vcf),]
+vcf[, 10:ncol(vcf)] <- as.data.frame(apply( vcf[, 10:ncol(vcf)], MAR = c(1, 2), FUN = function(x) gsub(":.*", "", x)))
+vcf[, 10:ncol(vcf)] <- as.data.frame(apply( vcf[, 10:ncol(vcf)], MAR = c(1, 2), FUN = function(x) if (x == "0/0") {return(0)} else if (x == "0/1") {return(1)} else if (x == "1/1") {return(2)} else if (x == "./.") {return(NA)} ))
 
-get_vcf_meta <- function(vcf){
+get_vcf_meta <- function(vcf) {
   # take a VCF and split out the meta data 
   # to use for querying
-  vcf_meta <-  as.data.frame(str_split_fixed(vcf$ID, "\\.", 3), stringsAsFactors = FALSE)
-  vcf_meta$SNP_pos <- paste(vcf_meta$V2, vcf_meta$V3, sep = ":")
-  vcf_meta <- data.frame( SNP = vcf_meta$V1, SNP_pos = vcf_meta$SNP_pos, REF = vcf$REF, ALT = vcf$ALT, stringsAsFactors = FALSE)
+  vcf_meta <- data.frame(SNP = vcf$ID, SNP_pos = paste(vcf$`#CHROM`, vcf$POS, sep = ":"), REF = vcf$REF, ALT = vcf$ALT, stringsAsFactors = FALSE)
   return(vcf_meta)
 }
+
 vcf_meta <- get_vcf_meta(vcf)
 
 ##################
@@ -146,23 +96,27 @@ vcf_meta <- get_vcf_meta(vcf)
 ##################
 
 # from significant associations
-sigClusters <- str_split_fixed(res[,1], ":",4)[,4]
-# add Nalls' GWAS SNP clusters and Yang's too!
-sigClusters <- c(sigClusters, gwas_clusters, yang_clusters)
+sigClusters <- unique(sapply(strsplit(unique(res[qval < 0.1]$intron_cluster), ":"), function(x) x[4]))
 
-introns <- get_intron_meta(row.names(clusters) )
-keepClusters <- match(introns$clu,sigClusters)
+introns <- get_intron_meta(row.names(clusters)) %>% as.data.table()
+sig_index <- which(sapply(strsplit(rownames(clusters), ":"), function(x) x[4]) %in% sigClusters)
 
-# remove non-significant (or non-GWAS SNP-associated) clusters
-introns <- introns[ !is.na(keepClusters),]
-clusters <- clusters[ !is.na(keepClusters),]
+# remove non-significant clusters
+introns <- introns[clu %in% sigClusters]
+clusters <- clusters[sig_index,]
+
+swap_id <- data.table(Run = colnames(clusters))
+swap_id[, index := .I]
+swap_id <- merge(swap_id, srr2gtex, "Run") %>%
+  setorder(., index)
+new_ids <- swap_id$submitted_subject_id
+colnames(clusters) <- new_ids
 
 # rearrange sample columns in clusters so they match the VCF
 samples <- names(vcf)[10:ncol(vcf)]
 clusters <- clusters[, samples]
 
 introns_to_plot <- get_intron_meta(row.names(clusters))
-#row.names(clusters) <- clusters$chrom; clusters$chrom <- NULL
 
 # for each cluster work out mean proportion of each junction
 # remove junctions < 1% contribution
@@ -180,16 +134,16 @@ splitClusters <- introns_to_plot %>%
   purrr::map_df( juncProp ) %>%
   mutate( clu = as.character(.$clu))
 
-introns_to_plot <- introns_to_plot[ splitClusters$prop >= 0.01,]
-clusters <- clusters[ splitClusters$prop >= 0.01,]
-introns <- introns[ splitClusters$prop >= 0.01,]
+introns_to_plot <- introns_to_plot[splitClusters$prop >= 0.01,]
+clusters <- clusters[splitClusters$prop >= 0.01,]
+introns <- introns[splitClusters$prop >= 0.01,]
 
 ####################
 # ANNOTATE JUNCTIONS
 ####################
 
 # functions now in separate script
-source("sQTLviz/sQTL_annotation_functions.R")
+source("~/Desktop/sQTLviz-master/sQTL_annotation_functions.R")
 
 intersects <- intersect_introns(introns)
 threeprime_intersect <- intersects[[1]]
@@ -240,18 +194,7 @@ sigJunctions <- cbind( get_intron_meta( res[,1]),
                        res[, c(1,2,3)],
                        get_snp_meta(res[,2]))
 
-# create identical table for GWAS junctions
-NallsJunctions <- cbind( get_intron_meta(top_gwas_assoc$cluster),
-                         top_gwas_assoc$cluster,
-                         top_gwas_assoc$SNP_full,
-                         top_gwas_assoc$P,
-                         get_snp_meta(top_gwas_assoc$SNP_full))
 
-YangJunctions <- cbind( get_intron_meta(top_yang_assoc$cluster),
-                        top_yang_assoc$cluster,
-                        top_yang_assoc$SNP_full,
-                        top_yang_assoc$P,
-                        get_snp_meta(top_yang_assoc$SNP_full))
 # bind together - all will be accessible in same table
 names(NallsJunctions) <- names(sigJunctions)
 names(YangJunctions) <- names(sigJunctions)
@@ -303,51 +246,7 @@ resultsToPlot <- as.data.frame( select( resultsByCluster,
 row.names(resultsToPlot) <- resultsByCluster$clu
 resultsToPlot$q <- signif(resultsToPlot$q,  digits = 3)
 
-# create separate table for Nalls results
-GWAS_metadata <- read.table("data/PD_GWAS_SNPs.txt", header=TRUE, stringsAsFactors = FALSE)
 
-GWASresults <- select(NallsJunctions,
-                      clu,
-                      chr,
-                      start,
-                      end,
-                      SNP = snp_ID,
-                      snp_chr,
-                      pos = snp_pos,
-                      q = bpval # is this really FDR or uncorrected P?
-                      ) %>%
-    mutate( 
-      SNP_pos = paste0(snp_chr, ":", pos),
-      cluster_pos = paste0("chr", chr, ":", start, "-", end),
-      gene = annotatedClusters$gene[ match(clu, annotatedClusters$clusterID)],
-      "GWAS P" = GWAS_metadata$P.joint[ match( SNP, GWAS_metadata$SNP.orig)],
-      q <- signif(q,  digits = 3)
-      ) %>%
-  select( "GWAS P", SNP, SNP_pos, gene, cluster_pos, q) %>%
- # arrange("GWAS p") %>%
-  as.data.frame(stringsAsFactors = FALSE)
-row.names(GWASresults) <- NallsJunctions$clu
-
-YangResults <- select(YangJunctions,
-                       clu,
-                       chr,
-                       start,
-                       end,
-                       SNP = snp_ID,
-                       snp_chr,
-                       pos = snp_pos,
-                       q = bpval # is this really FDR or uncorrected P?
-) %>%
-  mutate( 
-    SNP_pos = paste0(snp_chr, ":", pos),
-    cluster_pos = paste0("chr", chr, ":", start, "-", end),
-    gene = annotatedClusters$gene[ match(clu, annotatedClusters$clusterID)],
-    q <- signif(q,  digits = 3)
-  ) %>%
-  select( SNP, SNP_pos, gene, cluster_pos, q) %>%
-  # arrange("GWAS p") %>%
-  as.data.frame(stringsAsFactors = FALSE)
-row.names(YangResults) <- YangJunctions$clu
 
 # get the Betas and per-junction q values
 # add in full permutation results to get Beta for each junction
