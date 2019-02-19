@@ -12,7 +12,7 @@ ui <- tagList(
     #title = a(id = "gitLink", href="https://github.com/davidaknowles/leafcutter/tree/master/leafviz","LeafViz", target = "_blank"), 
     id = "navBarPage",
     windowTitle = "sQTLviz",
-    tabPanel("CommonMind Consortium sQTLs", 
+    tabPanel("Neandertal-Introgressed sQTLs", 
              value = "resultsToPlot",
              # padding-top: 70px
              tags$style(type="text/css", "
@@ -47,8 +47,6 @@ ui <- tagList(
 }
 
 ")),
-    tabPanel("Li et al TWAS SNPs", value = "YangResults"),
-    tabPanel("Nalls et al PD GWAS SNPs", value = "GWASresults" ),
     tabPanel("About", value = "NA",
              
              fluidRow(id = "tabDiv",
